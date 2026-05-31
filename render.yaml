@@ -13,9 +13,9 @@ services:
       - key: WORKER_ID
         value: render-blog-worker
       - key: WORKER_BATCH_SIZE
-        value: "500"
+        value: "10"
       - key: WORKER_CONCURRENCY
-        value: "500"
+        value: "5"
       - key: WORKER_STALE_LOCK_MINUTES
         value: "45"
       - key: WORKER_POLL_INTERVAL_MS

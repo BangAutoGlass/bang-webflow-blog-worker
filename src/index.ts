@@ -3,9 +3,9 @@ import OpenAI from "openai"
 const DEFAULT_EDGE_REQUEST_TIMEOUT_SECONDS = 90
 const DEFAULT_OPENAI_REQUEST_TIMEOUT_SECONDS = 900
 const DEFAULT_WEBFLOW_REQUEST_TIMEOUT_SECONDS = 120
-const DEFAULT_WORKER_BATCH_SIZE = 500
-const DEFAULT_WORKER_CONCURRENCY = 500
-const MAX_WORKER_CONCURRENCY = 500
+const DEFAULT_WORKER_BATCH_SIZE = 10
+const DEFAULT_WORKER_CONCURRENCY = 5
+const MAX_WORKER_CONCURRENCY = 10
 const DEFAULT_STALE_LOCK_MINUTES = 45
 const DEFAULT_POLL_INTERVAL_MS = 5000
 const DEFAULT_IDLE_POLL_INTERVAL_MS = 60000
@@ -14,7 +14,9 @@ const DEFAULT_HEARTBEAT_MS = 30000
 const DEFAULT_WEBFLOW_API_BASE = "https://api.webflow.com/v2"
 
 const EXPECTED_BODY_MODEL = "gpt-5.5-pro"
-const EXPECTED_FIELD_MODEL = "gpt-5.5-pro"
+const EXPECTED_FIELD_MODEL = "gpt-5.4"
+const EXPECTED_BODY_REASONING_EFFORT = "xhigh"
+const EXPECTED_FIELD_REASONING_EFFORT = "medium"
 
 type StepKind = "body_generation" | "title_and_field_generation" | "webflow_publish"
 type JsonRecord = Record<string, unknown>
@@ -404,6 +406,31 @@ function makeSafeOpenAIResponsePayload(response: any) {
   }) as JsonRecord
 }
 
+function expectedReasoningEffortForPhase(phase: StepKind) {
+  if (phase === "title_and_field_generation") return EXPECTED_FIELD_REASONING_EFFORT
+  if (phase === "body_generation") return EXPECTED_BODY_REASONING_EFFORT
+  return firstString(EXPECTED_BODY_REASONING_EFFORT, "medium")
+}
+
+function normalizeReasoningForItem(item: WorkItem, request: JsonRecord) {
+  const requestReasoning = asRecord(request.reasoning)
+  const expectedEffort = expectedReasoningEffortForPhase(item.phase)
+
+  // Cost guardrail: field generation must stay on medium reasoning even if an older
+  // Edge claim payload still contains xhigh from a previously queued job.
+  if (item.phase === "title_and_field_generation") {
+    return {
+      ...requestReasoning,
+      effort: EXPECTED_FIELD_REASONING_EFFORT,
+    }
+  }
+
+  return {
+    ...requestReasoning,
+    effort: firstString(requestReasoning.effort, item.reasoningEffort, expectedEffort),
+  }
+}
+
 function buildOpenAIRequestPayload(item: WorkItem) {
   const request = asRecord(item.request)
   const payload: JsonRecord = {
@@ -411,7 +438,7 @@ function buildOpenAIRequestPayload(item: WorkItem) {
     instructions: firstString(request.instructions),
     input: firstString(request.input),
     tools: Array.isArray(request.tools) ? request.tools : [{ type: firstString(item.webSearchTool, "web_search_preview") }],
-    reasoning: isRecord(request.reasoning) ? request.reasoning : { effort: firstString(item.reasoningEffort, "xhigh") },
+    reasoning: normalizeReasoningForItem(item, request),
     text: isRecord(request.text) ? request.text : undefined,
     store: request.store === true,
   }
@@ -432,6 +459,21 @@ function validateWorkItemModel(item: WorkItem) {
 
   if (item.phase === "title_and_field_generation" && item.model !== EXPECTED_FIELD_MODEL) {
     throw new Error(`Field generation must use ${EXPECTED_FIELD_MODEL}; received ${item.model}.`)
+  }
+}
+
+function validateOpenAIPhaseConfig(item: WorkItem, payload: JsonRecord) {
+  validateWorkItemModel(item)
+
+  const effort = firstString(asRecord(payload.reasoning).effort)
+  const expectedEffort = expectedReasoningEffortForPhase(item.phase)
+
+  if (item.phase === "title_and_field_generation" && effort !== EXPECTED_FIELD_REASONING_EFFORT) {
+    throw new Error(`Field generation must use ${EXPECTED_FIELD_REASONING_EFFORT} reasoning; received ${effort || "none"}.`)
+  }
+
+  if (item.phase === "body_generation" && !effort) {
+    throw new Error(`Body generation is missing reasoning effort. Expected ${expectedEffort}.`)
   }
 }
 
@@ -491,11 +533,10 @@ function buildResearchPayloadFromOpenAI(item: WorkItem, parsed: JsonRecord, resp
 }
 
 async function runOpenAIPhase(item: WorkItem): Promise<PhaseResult> {
-  validateWorkItemModel(item)
-
   const startedAt = Date.now()
   const label = getOpenAILabel(item)
   const payload = buildOpenAIRequestPayload(item)
+  validateOpenAIPhaseConfig(item, payload)
 
   const response = await createOpenAIResponse(payload, label)
   const outputText = getOutputText(response)
@@ -521,6 +562,7 @@ async function runOpenAIPhase(item: WorkItem): Promise<PhaseResult> {
       apiKey: undefined,
       workerId: config.workerId,
       modelSecretName: item.modelSecretName,
+      reasoningEffort: firstString(asRecord(payload.reasoning).effort),
     },
     responsePayload: makeSafeOpenAIResponsePayload(response),
     parsedOutput: parsed,
@@ -812,6 +854,7 @@ async function processWorkItem(item: WorkItem): Promise<PhaseResult> {
     phase: item.phase,
     model: item.model,
     modelSecretName: item.modelSecretName,
+    reasoningEffort: firstString(item.reasoningEffort, expectedReasoningEffortForPhase(item.phase)),
   })
 
   try {
@@ -976,6 +1019,8 @@ function validateRuntimeConfig() {
     heartbeatMs: config.heartbeatMs,
     expectedBodyModel: EXPECTED_BODY_MODEL,
     expectedFieldModel: EXPECTED_FIELD_MODEL,
+    expectedBodyReasoningEffort: EXPECTED_BODY_REASONING_EFFORT,
+    expectedFieldReasoningEffort: EXPECTED_FIELD_REASONING_EFFORT,
     webflowTokenPresent: Boolean(config.webflowToken),
     validateWebflowFields: config.validateWebflowFields,
     storeFullOpenAIResponse: config.storeFullOpenAIResponse,
