@@ -13,7 +13,7 @@ const DEFAULT_ERROR_SLEEP_MS = 30000
 const DEFAULT_HEARTBEAT_MS = 30000
 const DEFAULT_WEBFLOW_API_BASE = "https://api.webflow.com/v2"
 
-const EXPECTED_BODY_MODEL = "gpt-5.5-pro"
+const EXPECTED_BODY_MODEL = "gpt-5.5"
 const EXPECTED_FIELD_MODEL = "gpt-5.4"
 const EXPECTED_BODY_REASONING_EFFORT = "xhigh"
 const EXPECTED_FIELD_REASONING_EFFORT = "medium"
