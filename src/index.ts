@@ -13,7 +13,7 @@ const DEFAULT_ERROR_SLEEP_MS = 30000
 const DEFAULT_HEARTBEAT_MS = 30000
 const DEFAULT_WEBFLOW_API_BASE = "https://api.webflow.com/v2"
 
-const EXPECTED_BODY_MODEL = "gpt-5.5-pro-long-context"
+const EXPECTED_BODY_MODEL = "gpt-5.5-pro"
 const EXPECTED_FIELD_MODEL = "gpt-5.5-pro"
 
 type StepKind = "body_generation" | "title_and_field_generation" | "webflow_publish"
